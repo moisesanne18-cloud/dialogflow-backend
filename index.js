@@ -1,5 +1,4 @@
-// Complete index.js - Dialogflow KB + Groq LLM Enhancement (IMPROVED HYBRID)
-// With ZERO meta-commentary and clean output rules
+// Complete index.js - Dialogflow KB + Groq LLM Enhancement (HYBRID APPROACH)
 // For Render.com deployment
 
 const express = require('express');
@@ -33,25 +32,7 @@ const CONFIDENCE_LEVELS = {
 };
 
 // ============================================================================
-// MASTER RULES FOR GROQ (Applied to ALL modes)
-// ============================================================================
-const MASTER_RULES = `You are GrowBot 🌿, a friendly gardening assistant.
-
-You follow these strict rules:
-
-1. NEVER mention confidence levels, document relevance, or that something is not the main topic.
-2. NEVER analyze the document like a researcher.
-3. NEVER say "the text says…" or "based on the document…"
-4. NEVER include long explanations. Keep the answer short and helpful.
-5. ALWAYS answer the user's question FIRST, in a clean sentence.
-6. ALWAYS be honest if the KB lacks specific information.
-7. If KB is incomplete → add helpful general gardening advice.
-8. Do NOT invent specific facts not widely accepted in gardening.
-9. DO NOT write like an academic. Be friendly and practical.
-10. KEEP ANSWERS: 2–4 sentences total.`;
-
-// ============================================================================
-// MAIN ENDPOINT - Enhanced with Improved Hybrid Groq LLM
+// MAIN ENDPOINT - Enhanced with Hybrid Groq LLM
 // ============================================================================
 app.post('/detectIntent', async (req, res) => {
   try {
@@ -85,7 +66,7 @@ app.post('/detectIntent', async (req, res) => {
     let finalFulfillmentText = result.fulfillmentText;
     let answerSource = 'default'; // Track where answer came from
 
-    // Step 2: Improved Hybrid Enhancement Logic
+    // Step 2: Hybrid Enhancement Logic
     if (knowledgeAnswers.length > 0) {
       const kbAnswer = knowledgeAnswers[0];
       const kbSnippet = kbAnswer.answer;
@@ -121,15 +102,15 @@ app.post('/detectIntent', async (req, res) => {
             }
 
           } else if (confidence === CONFIDENCE_LEVELS.LOW) {
-            // LOW confidence → Try improved hybrid approach
-            console.log('⚠️  LOW confidence - attempting improved hybrid answer...');
+            // LOW confidence → Try hybrid approach
+            console.log('⚠️  LOW confidence - attempting hybrid answer...');
             
             const hybridAnswer = await handleLowConfidenceWithGroq(query, kbSnippet);
             
             if (hybridAnswer) {
               finalFulfillmentText = hybridAnswer;
               answerSource = 'hybrid';
-              console.log('✅ Improved hybrid answer generated!');
+              console.log('✅ Hybrid answer generated!');
             } else {
               finalFulfillmentText = kbSnippet;
               answerSource = 'kb_fallback';
@@ -152,7 +133,7 @@ app.post('/detectIntent', async (req, res) => {
       }
 
     } else {
-      // No KB match at all → Try improved general knowledge
+      // No KB match at all → Try general knowledge
       console.log('❓ No KB match found - attempting general knowledge answer...');
       
       if (GROQ_API_KEY) {
@@ -185,7 +166,7 @@ app.post('/detectIntent', async (req, res) => {
       detectedIntent: result.intent?.displayName || null,
       confidence: result.intentDetectionConfidence || 0,
       fulfillmentText: finalFulfillmentText,
-      answerSource: answerSource, // Helps with debugging
+      answerSource: answerSource, // NEW: Helps with debugging
       knowledgeAnswers: knowledgeAnswers.map(a => ({
         answer: a.answer,
         matchConfidence: a.matchConfidence,
@@ -203,35 +184,14 @@ app.post('/detectIntent', async (req, res) => {
 // STRICT KB-ONLY ENHANCEMENT (for HIGH/MEDIUM confidence)
 // ============================================================================
 async function enhanceAnswerWithGroq(userQuery, kbSnippet, confidence) {
-  const prompt = `You are GrowBot 🌿, a friendly gardening assistant. Follow these rules STRICTLY:
-
-🚫 STRICT RULES:
-1. Answer ONLY using the SOURCE DOCUMENT below - nothing else!
-2. If the answer is not in the source, say: "I don't have specific information about that in my knowledge base."
-3. Do NOT add information from general knowledge or make assumptions
-4. Do NOT infer or extrapolate beyond what's explicitly written
-5. Keep your answer natural, conversational, and helpful
-6. Make it 2-4 sentences maximum
-7. Directly address the user's specific question
-8. NEVER mention confidence levels or document analysis
-9. NEVER say "the text says" or "according to the document"
-10. Just give the answer cleanly and directly
-
-📄 SOURCE DOCUMENT (TRUTH):
-────────────────────────────
-${kbSnippet}
-────────────────────────────
-
-❓ USER'S QUESTION: "${userQuery}"
-
-💬 YOUR ANSWER (conversational, friendly, 2-4 sentences):`;
+  const prompt = createAntiHallucinationPrompt(userQuery, kbSnippet, confidence);
 
   const requestData = {
     model: GROQ_MODEL,
     messages: [
       {
         role: 'system',
-        content: MASTER_RULES
+        content: 'You are GrowBot 🌿, a helpful gardening assistant. You answer questions using ONLY the provided knowledge base information. Never make up information or use general knowledge.'
       },
       {
         role: 'user',
@@ -270,37 +230,39 @@ ${kbSnippet}
 }
 
 // ============================================================================
-// IMPROVED HYBRID APPROACH (for LOW confidence - KB + General Knowledge)
+// HYBRID APPROACH (for LOW confidence - KB + General Knowledge)
 // ============================================================================
 async function handleLowConfidenceWithGroq(userQuery, kbSnippet) {
-  const hybridPrompt = `You are GrowBot 🌿, a friendly gardening assistant.
+  const hybridPrompt = `You are GrowBot 🌿, a gardening assistant.
 
-The user asked: "${userQuery}"
+SITUATION: The user asked about "${userQuery}"
+Our knowledge base has LIMITED information about this.
 
-Below is partial or incomplete information from the knowledge base:
+SOURCE INFO (incomplete or partially relevant):
 ────────────────────────────
 ${kbSnippet}
 ────────────────────────────
 
-Your task:
-- Give a clean and direct answer to the user.
-- Do NOT reference or analyze the KB.
-- If the KB info is incomplete, add 1–2 helpful general gardening tips.
-- If the KB info does not answer the question directly, simply give general gardening advice related to the topic.
-- NEVER mention that the document is incomplete or unrelated.
-- NEVER mention confidence levels or document matching.
-- NEVER say things like "aphids aren't the main topic" or analyze the document.
-- Keep the answer short (2–4 sentences), friendly, and practical.
-- Start with the answer immediately, no meta commentary.
+YOUR TASK:
+1. Read the source info carefully
+2. If it partially answers the question → Use it and supplement with general gardening knowledge
+3. Keep your answer practical and actionable (2-4 sentences)
+4. If using general knowledge, briefly mention it's based on general practices
 
-Your final answer:`;
+RULES:
+- Prioritize source info when available
+- Add helpful general advice to make the answer complete
+- Be conversational and friendly
+- Focus on practical, actionable guidance
+
+YOUR ANSWER:`;
 
   const requestData = {
     model: GROQ_MODEL,
     messages: [
       {
         role: 'system',
-        content: MASTER_RULES
+        content: 'You are GrowBot, a knowledgeable gardening assistant. Provide helpful, accurate gardening advice by combining available source info with general knowledge.'
       },
       {
         role: 'user',
@@ -330,35 +292,35 @@ Your final answer:`;
 }
 
 // ============================================================================
-// IMPROVED GENERAL KNOWLEDGE FALLBACK (for NO KB match at all)
+// GENERAL KNOWLEDGE FALLBACK (for NO KB match at all)
 // ============================================================================
 async function handleNoKBMatchWithGroq(userQuery) {
-  const generalPrompt = `You are GrowBot 🌿, a friendly gardening assistant.
+  const generalPrompt = `You are GrowBot 🌿, a gardening assistant.
 
 The user asked: "${userQuery}"
 
-There is no information about this in the knowledge base.
+We don't have specific information about this in our knowledge base.
 
-Your task:
-- Be honest about that in ONE short sentence.
-- Then provide 1–2 practical general gardening tips related to the question.
-- Keep the tone friendly, helpful, and simple.
-- Avoid unnecessary details or scientific jargon.
-- Never produce long explanations.
-- NEVER mention confidence levels or document analysis.
-- Just be helpful and direct.
+YOUR TASK:
+- Provide helpful general gardening advice based on your knowledge
+- Keep it practical and actionable (2-3 sentences)
+- Mention this is general gardening advice
+- If the topic is outside gardening, politely redirect to gardening topics
 
-Example format:
-"I don't have specific info about that in my knowledge base. [Then 1-2 helpful tips]"
+RULES:
+- Be honest about using general knowledge
+- Focus on safe, widely-accepted practices
+- Keep it conversational and friendly
+- If unsure, recommend consulting a local expert
 
-Your final answer:`;
+YOUR ANSWER:`;
 
   const requestData = {
     model: GROQ_MODEL,
     messages: [
       {
         role: 'system',
-        content: MASTER_RULES
+        content: 'You are GrowBot, a helpful gardening assistant. Provide general gardening advice when specific knowledge base info is unavailable.'
       },
       {
         role: 'user',
@@ -385,6 +347,39 @@ Your final answer:`;
     console.error('General knowledge query failed:', error.message);
     return null;
   }
+}
+
+// ============================================================================
+// ANTI-HALLUCINATION PROMPT (for HIGH/MEDIUM confidence KB matches)
+// ============================================================================
+function createAntiHallucinationPrompt(userQuery, kbSnippet, confidence) {
+  return `You are answering a gardening question for GrowBot. Follow these rules STRICTLY:
+
+🚫 STRICT RULES:
+1. Answer ONLY using the SOURCE DOCUMENT below - nothing else!
+2. If the answer is not in the source, say: "I don't have specific information about that in my knowledge base."
+3. Do NOT add information from general knowledge or make assumptions
+4. Do NOT infer or extrapolate beyond what's explicitly written
+5. Keep your answer natural, conversational, and helpful
+6. Make it 2-4 sentences maximum
+7. Directly address the user's specific question
+
+📄 SOURCE DOCUMENT (TRUTH):
+────────────────────────────
+${kbSnippet}
+────────────────────────────
+
+❓ USER'S QUESTION: "${userQuery}"
+
+🎯 CONFIDENCE LEVEL: ${confidence}
+
+✍️ YOUR TASK:
+- Read the source document carefully
+- Check if it contains the answer to the user's question
+- If YES: Rewrite the relevant information in a clear, natural, conversational way that directly answers their question
+- If NO: Say you don't have that specific information
+
+💬 YOUR ANSWER (conversational tone, like texting a friend, 2-4 sentences):`;
 }
 
 // ============================================================================
@@ -447,30 +442,21 @@ function makeGroqRequest(requestData) {
 app.get('/', (req, res) => {
   res.json({
     status: 'running',
-    service: 'Dialogflow KB Backend with Improved Hybrid Groq Enhancement 🌿',
-    approach: 'improved_hybrid',
+    service: 'Dialogflow KB Backend with Hybrid Groq Enhancement 🌿',
+    approach: 'hybrid',
     groqConfigured: !!GROQ_API_KEY,
     model: GROQ_MODEL,
-    version: '3.1.0-improved',
+    version: '3.0.0-hybrid',
     features: {
-      highConfidence: 'Strict KB-only enhancement (zero meta-commentary)',
-      mediumConfidence: 'Strict KB-only enhancement (zero meta-commentary)',
-      lowConfidence: 'Improved Hybrid (KB + General, clean output)',
-      noMatch: 'General gardening knowledge (honest + helpful)'
+      highConfidence: 'Strict KB-only enhancement',
+      mediumConfidence: 'Strict KB-only enhancement',
+      lowConfidence: 'Hybrid (KB + General Knowledge)',
+      noMatch: 'General gardening knowledge'
     },
-    improvements: [
-      'Zero meta-commentary about documents or confidence',
-      'No academic analysis tone',
-      'Clean, direct answers only',
-      'Short responses (2-4 sentences)',
-      'Friendly and practical',
-      'Honest when KB lacks info'
-    ],
     endpoints: {
       detectIntent: 'POST /detectIntent',
       testGroq: 'POST /test-groq',
       testHybrid: 'POST /test-hybrid',
-      testGeneral: 'POST /test-general',
       health: 'GET /'
     }
   });
@@ -510,7 +496,7 @@ app.post('/test-groq', async (req, res) => {
   }
 });
 
-// Test improved hybrid approach
+// Test hybrid approach
 app.post('/test-hybrid', async (req, res) => {
   const { query, kbText } = req.body;
 
@@ -521,11 +507,11 @@ app.post('/test-hybrid', async (req, res) => {
   try {
     const hybrid = await handleLowConfidenceWithGroq(
       query || 'How to deal with aphids?',
-      kbText || 'Aphids are small insects that can damage plants.'
+      kbText || 'Aphids are small insects.'
     );
 
     res.json({
-      mode: 'improved_hybrid',
+      mode: 'hybrid',
       original: kbText,
       enhanced: hybrid,
       success: true
@@ -574,7 +560,7 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log('');
   console.log('═══════════════════════════════════════════════════');
-  console.log('🌱 GrowBot Backend Server Started (IMPROVED)! 🌱');
+  console.log('🌱 GrowBot Backend Server Started (HYBRID MODE)! 🌱');
   console.log('═══════════════════════════════════════════════════');
   console.log(`📡 Port: ${PORT}`);
   console.log(`🤖 Dialogflow Project: ${projectId}`);
@@ -582,23 +568,16 @@ app.listen(PORT, () => {
   console.log(`✨ Groq API: ${GROQ_API_KEY ? '✅ Configured' : '❌ NOT CONFIGURED'}`);
   console.log(`🧠 Model: ${GROQ_MODEL}`);
   console.log('');
-  console.log('🎯 Improved Hybrid Strategy:');
-  console.log('   ✅ HIGH/MEDIUM → Strict KB-only (clean output)');
-  console.log('   ✅ LOW → Improved Hybrid (no meta-commentary)');
-  console.log('   ✅ NO MATCH → General Knowledge (honest + helpful)');
-  console.log('');
-  console.log('🔥 Key Improvements:');
-  console.log('   • Zero meta-commentary about documents');
-  console.log('   • No academic analysis tone');
-  console.log('   • Clean, direct answers only');
-  console.log('   • Short responses (2-4 sentences)');
-  console.log('   • Honest when KB lacks info');
+  console.log('🎯 Hybrid Strategy:');
+  console.log('   HIGH/MEDIUM confidence → Strict KB-only');
+  console.log('   LOW confidence → Hybrid (KB + General)');
+  console.log('   NO MATCH → General Knowledge');
   console.log('');
   console.log('📍 Endpoints:');
   console.log(`   GET  / (health check)`);
   console.log(`   POST /detectIntent (main endpoint)`);
   console.log(`   POST /test-groq (test KB-only)`);
-  console.log(`   POST /test-hybrid (test improved hybrid)`);
+  console.log(`   POST /test-hybrid (test hybrid mode)`);
   console.log(`   POST /test-general (test general knowledge)`);
   console.log('═══════════════════════════════════════════════════');
   console.log('');
