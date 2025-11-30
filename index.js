@@ -1,15 +1,16 @@
-// Complete index.js - Dialogflow KB + Groq LLM Enhancement (HYBRID APPROACH)
+// Complete index.js - SMART HYBRID: Groq-First with KB Validation
+// Web knowledge FIRST, then cross-check with KB
 // For Render.com deployment
 
 const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
 const dialogflow = require('@google-cloud/dialogflow').v2beta1;
-const https = require('https'); // For Groq API calls
+const https = require('https');
 
 const app = express();
 app.use(bodyParser.json());
-app.use(cors()); // Allow all origins
+app.use(cors());
 
 // Dialogflow client
 const sessionClient = new dialogflow.SessionsClient({
@@ -20,8 +21,8 @@ const projectId = 'digibot-qkf9';
 const knowledgeBaseId = 'Njc5Njg3MDI3MDg3NjM4NTI5';
 
 // Groq API Configuration
-const GROQ_API_KEY = process.env.GROQ_API_KEY; // Set this in Render dashboard
-const GROQ_MODEL = 'llama-3.1-8b-instant'; // Fast and accurate
+const GROQ_API_KEY = process.env.GROQ_API_KEY;
+const GROQ_MODEL = 'llama-3.1-8b-instant';
 
 // Confidence levels
 const CONFIDENCE_LEVELS = {
@@ -32,7 +33,22 @@ const CONFIDENCE_LEVELS = {
 };
 
 // ============================================================================
-// MAIN ENDPOINT - Enhanced with Hybrid Groq LLM
+// MASTER RULES FOR GROQ
+// ============================================================================
+const MASTER_RULES = `You are GrowBot 🌿, a friendly and knowledgeable gardening assistant.
+
+CORE RULES:
+1. Give direct, practical gardening advice
+2. Keep answers SHORT: 2-4 sentences maximum
+3. Be friendly and conversational
+4. Never mention documents, confidence levels, or meta-analysis
+5. Never say "the text says" or "according to..."
+6. Focus on actionable tips gardeners can use immediately
+7. Use simple language, avoid scientific jargon unless necessary
+8. Be honest if you're unsure about something specific`;
+
+// ============================================================================
+// MAIN ENDPOINT - SMART HYBRID (Groq-First Strategy)
 // ============================================================================
 app.post('/detectIntent', async (req, res) => {
   try {
@@ -40,138 +56,143 @@ app.post('/detectIntent', async (req, res) => {
 
     console.log(`\n📩 New query: "${query}"`);
 
-    // Step 1: Call Dialogflow Knowledge Base
-    const sessionPath = sessionClient.projectAgentSessionPath(projectId, sessionId);
-    const knowledgeBasePath = `projects/${projectId}/knowledgeBases/${knowledgeBaseId}`;
+    // ========================================================================
+    // STEP 1: Get Groq Answer FIRST (Primary Source)
+    // ========================================================================
+    let groqAnswer = null;
+    let groqSuccess = false;
 
-    const request = {
-      session: sessionPath,
-      queryInput: {
-        text: {
-          text: query,
-          languageCode: languageCode || 'en-US',
-        },
-      },
-      queryParams: {
-        knowledgeBaseNames: [knowledgeBasePath],
-      },
-    };
-
-    const responses = await sessionClient.detectIntent(request);
-    const result = responses[0].queryResult;
-
-    const knowledgeAnswers = result.knowledgeAnswers?.answers || [];
-    console.log(`📚 KB matches found: ${knowledgeAnswers.length}`);
-
-    let finalFulfillmentText = result.fulfillmentText;
-    let answerSource = 'default'; // Track where answer came from
-
-    // Step 2: Hybrid Enhancement Logic
-    if (knowledgeAnswers.length > 0) {
-      const kbAnswer = knowledgeAnswers[0];
-      const kbSnippet = kbAnswer.answer;
-      const confidence = kbAnswer.matchConfidenceLevel || 'NO_MATCH';
-
-      console.log(`🎯 Confidence level: ${confidence}`);
-
-      // Check if Groq API key is configured
-      if (!GROQ_API_KEY) {
-        console.warn('⚠️  GROQ_API_KEY not set - returning original KB text');
-        finalFulfillmentText = kbSnippet;
-        answerSource = 'kb_only';
-      } else {
-        try {
-          if (confidence === CONFIDENCE_LEVELS.HIGH || confidence === CONFIDENCE_LEVELS.MEDIUM) {
-            // HIGH/MEDIUM confidence → Strict KB-only enhancement
-            console.log('✨ HIGH/MEDIUM confidence - strict KB enhancement...');
-            
-            const enhancedAnswer = await enhanceAnswerWithGroq(
-              query,
-              kbSnippet,
-              confidence
-            );
-
-            if (enhancedAnswer && enhancedAnswer !== kbSnippet) {
-              finalFulfillmentText = enhancedAnswer;
-              answerSource = 'kb_enhanced';
-              console.log('✅ Answer enhanced successfully (KB-only)!');
-            } else {
-              finalFulfillmentText = kbSnippet;
-              answerSource = 'kb_original';
-              console.log('📋 Using original KB text');
-            }
-
-          } else if (confidence === CONFIDENCE_LEVELS.LOW) {
-            // LOW confidence → Try hybrid approach
-            console.log('⚠️  LOW confidence - attempting hybrid answer...');
-            
-            const hybridAnswer = await handleLowConfidenceWithGroq(query, kbSnippet);
-            
-            if (hybridAnswer) {
-              finalFulfillmentText = hybridAnswer;
-              answerSource = 'hybrid';
-              console.log('✅ Hybrid answer generated!');
-            } else {
-              finalFulfillmentText = kbSnippet;
-              answerSource = 'kb_fallback';
-              console.log('📋 Hybrid failed - using KB text');
-            }
-
-          } else {
-            // NO_MATCH → Use KB snippet as fallback
-            console.log('❌ NO_MATCH - using KB fallback');
-            finalFulfillmentText = kbSnippet;
-            answerSource = 'kb_no_match';
-          }
-
-        } catch (groqError) {
-          console.error('❌ Groq enhancement failed:', groqError.message);
-          console.log('📋 Falling back to original KB text');
-          finalFulfillmentText = kbSnippet;
-          answerSource = 'kb_error_fallback';
+    if (GROQ_API_KEY) {
+      try {
+        console.log('🌐 Getting Groq answer first...');
+        groqAnswer = await getGroqAnswer(query);
+        
+        if (groqAnswer && groqAnswer.length > 10) {
+          groqSuccess = true;
+          console.log('✅ Groq answer retrieved successfully!');
+        } else {
+          console.log('⚠️  Groq answer too short or empty');
         }
+      } catch (error) {
+        console.error('❌ Groq failed:', error.message);
+      }
+    } else {
+      console.warn('⚠️  GROQ_API_KEY not configured');
+    }
+
+    // ========================================================================
+    // STEP 2: Check KB for Validation/Enhancement (Secondary)
+    // ========================================================================
+    let kbAnswer = null;
+    let kbConfidence = 'NO_MATCH';
+    let kbFound = false;
+
+    try {
+      console.log('📚 Checking KB for validation...');
+      
+      const sessionPath = sessionClient.projectAgentSessionPath(projectId, sessionId);
+      const knowledgeBasePath = `projects/${projectId}/knowledgeBases/${knowledgeBaseId}`;
+
+      const request = {
+        session: sessionPath,
+        queryInput: {
+          text: {
+            text: query,
+            languageCode: languageCode || 'en-US',
+          },
+        },
+        queryParams: {
+          knowledgeBaseNames: [knowledgeBasePath],
+        },
+      };
+
+      const responses = await sessionClient.detectIntent(request);
+      const result = responses[0].queryResult;
+      const knowledgeAnswers = result.knowledgeAnswers?.answers || [];
+
+      if (knowledgeAnswers.length > 0) {
+        const kbResult = knowledgeAnswers[0];
+        kbAnswer = kbResult.answer;
+        kbConfidence = kbResult.matchConfidenceLevel || 'NO_MATCH';
+        kbFound = true;
+        console.log(`✅ KB match found (${kbConfidence})`);
+      } else {
+        console.log('ℹ️  No KB match');
+      }
+
+    } catch (kbError) {
+      console.error('❌ KB check failed:', kbError.message);
+    }
+
+    // ========================================================================
+    // STEP 3: SMART DECISION LOGIC
+    // ========================================================================
+    let finalAnswer = '';
+    let answerSource = '';
+
+    if (groqSuccess && kbFound) {
+      // CASE 1: Both Groq and KB available
+      if (kbConfidence === CONFIDENCE_LEVELS.HIGH || kbConfidence === CONFIDENCE_LEVELS.MEDIUM) {
+        // KB has high confidence → Enhance Groq with KB
+        console.log('🎯 HIGH/MEDIUM KB confidence → Enhancing Groq with KB info');
+        try {
+          const enhanced = await enhanceGroqWithKB(query, groqAnswer, kbAnswer);
+          finalAnswer = enhanced || groqAnswer;
+          answerSource = 'groq_enhanced_by_kb';
+        } catch (error) {
+          console.error('Enhancement failed:', error.message);
+          finalAnswer = groqAnswer;
+          answerSource = 'groq_only';
+        }
+      } else {
+        // KB has low confidence → Use pure Groq
+        console.log('⚠️  LOW KB confidence → Using pure Groq answer');
+        finalAnswer = groqAnswer;
+        answerSource = 'groq_primary';
+      }
+
+    } else if (groqSuccess && !kbFound) {
+      // CASE 2: Groq success, no KB → Use Groq
+      console.log('🌐 No KB match → Using Groq answer');
+      finalAnswer = groqAnswer;
+      answerSource = 'groq_only';
+
+    } else if (!groqSuccess && kbFound) {
+      // CASE 3: Groq failed, KB available → Fallback to KB
+      console.log('📚 Groq failed → Falling back to KB');
+      if (kbConfidence === CONFIDENCE_LEVELS.HIGH || kbConfidence === CONFIDENCE_LEVELS.MEDIUM) {
+        try {
+          const enhanced = await enhanceKBAnswer(query, kbAnswer);
+          finalAnswer = enhanced || kbAnswer;
+          answerSource = 'kb_enhanced';
+        } catch (error) {
+          finalAnswer = kbAnswer;
+          answerSource = 'kb_original';
+        }
+      } else {
+        finalAnswer = kbAnswer;
+        answerSource = 'kb_low_confidence';
       }
 
     } else {
-      // No KB match at all → Try general knowledge
-      console.log('❓ No KB match found - attempting general knowledge answer...');
-      
-      if (GROQ_API_KEY) {
-        try {
-          const generalAnswer = await handleNoKBMatchWithGroq(query);
-          
-          if (generalAnswer) {
-            finalFulfillmentText = generalAnswer;
-            answerSource = 'general_knowledge';
-            console.log('✅ General knowledge answer generated!');
-          } else {
-            finalFulfillmentText = "I'm not sure about that specific topic. Could you rephrase your question or ask about something else related to gardening? 🌱";
-            answerSource = 'default_fallback';
-            console.log('❌ No answer possible - using default fallback');
-          }
-        } catch (error) {
-          console.error('❌ General knowledge query failed:', error.message);
-          finalFulfillmentText = "I'm having trouble answering that right now. Could you try asking in a different way? 🌱";
-          answerSource = 'error_fallback';
-        }
-      } else {
-        finalFulfillmentText = "I don't have information about that in my knowledge base. Try asking about plant care, watering, or common gardening topics! 🌱";
-        answerSource = 'no_groq_fallback';
-      }
+      // CASE 4: Both failed → Default message
+      console.log('❌ Both Groq and KB failed');
+      finalAnswer = "I'm having trouble answering that right now. Could you try rephrasing your question about gardening? 🌱";
+      answerSource = 'fallback';
     }
 
-    // Step 3: Return response to Flutter app
+    // ========================================================================
+    // STEP 4: Return Response
+    // ========================================================================
     res.json({
-      queryText: result.queryText,
-      detectedIntent: result.intent?.displayName || null,
-      confidence: result.intentDetectionConfidence || 0,
-      fulfillmentText: finalFulfillmentText,
-      answerSource: answerSource, // NEW: Helps with debugging
-      knowledgeAnswers: knowledgeAnswers.map(a => ({
-        answer: a.answer,
-        matchConfidence: a.matchConfidence,
-        matchConfidenceLevel: a.matchConfidenceLevel,
-      })),
+      queryText: query,
+      fulfillmentText: finalAnswer,
+      answerSource: answerSource,
+      metadata: {
+        groqSuccess: groqSuccess,
+        kbFound: kbFound,
+        kbConfidence: kbConfidence
+      }
     });
 
   } catch (err) {
@@ -181,24 +202,140 @@ app.post('/detectIntent', async (req, res) => {
 });
 
 // ============================================================================
-// STRICT KB-ONLY ENHANCEMENT (for HIGH/MEDIUM confidence)
+// GROQ PRIMARY ANSWER (Main source of truth)
 // ============================================================================
-async function enhanceAnswerWithGroq(userQuery, kbSnippet, confidence) {
-  const prompt = createAntiHallucinationPrompt(userQuery, kbSnippet, confidence);
+async function getGroqAnswer(userQuery) {
+  const prompt = `You are GrowBot 🌿, an expert gardening assistant.
+
+The user asked: "${userQuery}"
+
+Provide a helpful, accurate answer about gardening.
+
+REQUIREMENTS:
+- Give practical, actionable advice
+- Keep it 2-4 sentences
+- Be friendly and conversational
+- Focus on what works for most gardeners
+- If it's not about gardening, politely redirect
+
+Your answer:`;
 
   const requestData = {
     model: GROQ_MODEL,
     messages: [
       {
         role: 'system',
-        content: 'You are GrowBot 🌿, a helpful gardening assistant. You answer questions using ONLY the provided knowledge base information. Never make up information or use general knowledge.'
+        content: MASTER_RULES
       },
       {
         role: 'user',
         content: prompt
       }
     ],
-    temperature: 0.2,  // Low temperature = more factual
+    temperature: 0.4,
+    max_tokens: 350,
+    top_p: 0.9,
+    stream: false
+  };
+
+  try {
+    const response = await makeGroqRequest(requestData);
+    return response.choices[0].message.content.trim();
+  } catch (error) {
+    console.error('Groq primary answer failed:', error.message);
+    throw error;
+  }
+}
+
+// ============================================================================
+// ENHANCE GROQ WITH KB (When KB has high confidence)
+// ============================================================================
+async function enhanceGroqWithKB(userQuery, groqAnswer, kbAnswer) {
+  const prompt = `You are GrowBot 🌿.
+
+The user asked: "${userQuery}"
+
+You generated this answer:
+────────────────────────────
+${groqAnswer}
+────────────────────────────
+
+Additional verified information from knowledge base:
+────────────────────────────
+${kbAnswer}
+────────────────────────────
+
+TASK:
+- Review your answer against the KB info
+- If KB adds important details you missed, incorporate them naturally
+- If KB contradicts you, prioritize KB info
+- If KB doesn't add value, keep your original answer
+- Keep it 2-4 sentences, conversational and helpful
+- NEVER mention "knowledge base" or "according to"
+
+Final enhanced answer:`;
+
+  const requestData = {
+    model: GROQ_MODEL,
+    messages: [
+      {
+        role: 'system',
+        content: MASTER_RULES
+      },
+      {
+        role: 'user',
+        content: prompt
+      }
+    ],
+    temperature: 0.3,
+    max_tokens: 350,
+    top_p: 0.9,
+    stream: false
+  };
+
+  try {
+    const response = await makeGroqRequest(requestData);
+    return response.choices[0].message.content.trim();
+  } catch (error) {
+    console.error('Enhancement failed:', error.message);
+    throw error;
+  }
+}
+
+// ============================================================================
+// ENHANCE KB ANSWER (When Groq fails but KB exists)
+// ============================================================================
+async function enhanceKBAnswer(userQuery, kbAnswer) {
+  const prompt = `You are GrowBot 🌿.
+
+The user asked: "${userQuery}"
+
+Knowledge base information:
+────────────────────────────
+${kbAnswer}
+────────────────────────────
+
+TASK:
+- Rewrite this in a friendly, conversational way
+- Keep it 2-4 sentences
+- Make it practical and actionable
+- NEVER mention "knowledge base" or "document"
+
+Your answer:`;
+
+  const requestData = {
+    model: GROQ_MODEL,
+    messages: [
+      {
+        role: 'system',
+        content: MASTER_RULES
+      },
+      {
+        role: 'user',
+        content: prompt
+      }
+    ],
+    temperature: 0.2,
     max_tokens: 300,
     top_p: 0.9,
     stream: false
@@ -206,180 +343,11 @@ async function enhanceAnswerWithGroq(userQuery, kbSnippet, confidence) {
 
   try {
     const response = await makeGroqRequest(requestData);
-    const enhancedAnswer = response.choices[0].message.content.trim();
-    
-    // Basic validation
-    if (!enhancedAnswer || enhancedAnswer.length < 10) {
-      console.warn('⚠️  Enhanced answer too short, using original');
-      return kbSnippet;
-    }
-
-    // Check for "I don't have" responses
-    if (enhancedAnswer.toLowerCase().includes("i don't have") ||
-        enhancedAnswer.toLowerCase().includes("i cannot find")) {
-      console.warn('⚠️  LLM says no info available, using original KB text');
-      return kbSnippet;
-    }
-
-    return enhancedAnswer;
-
+    return response.choices[0].message.content.trim();
   } catch (error) {
-    console.error('Groq API error:', error.message);
-    return kbSnippet;
+    console.error('KB enhancement failed:', error.message);
+    throw error;
   }
-}
-
-// ============================================================================
-// HYBRID APPROACH (for LOW confidence - KB + General Knowledge)
-// ============================================================================
-async function handleLowConfidenceWithGroq(userQuery, kbSnippet) {
-  const hybridPrompt = `You are GrowBot 🌿, a gardening assistant.
-
-SITUATION: The user asked about "${userQuery}"
-Our knowledge base has LIMITED information about this.
-
-SOURCE INFO (incomplete or partially relevant):
-────────────────────────────
-${kbSnippet}
-────────────────────────────
-
-YOUR TASK:
-1. Read the source info carefully
-2. If it partially answers the question → Use it and supplement with general gardening knowledge
-3. Keep your answer practical and actionable (2-4 sentences)
-4. If using general knowledge, briefly mention it's based on general practices
-
-RULES:
-- Prioritize source info when available
-- Add helpful general advice to make the answer complete
-- Be conversational and friendly
-- Focus on practical, actionable guidance
-
-YOUR ANSWER:`;
-
-  const requestData = {
-    model: GROQ_MODEL,
-    messages: [
-      {
-        role: 'system',
-        content: 'You are GrowBot, a knowledgeable gardening assistant. Provide helpful, accurate gardening advice by combining available source info with general knowledge.'
-      },
-      {
-        role: 'user',
-        content: hybridPrompt
-      }
-    ],
-    temperature: 0.4,  // Slightly higher for general knowledge
-    max_tokens: 350,
-    top_p: 0.9,
-    stream: false
-  };
-
-  try {
-    const response = await makeGroqRequest(requestData);
-    const answer = response.choices[0].message.content.trim();
-    
-    if (!answer || answer.length < 10) {
-      return null;
-    }
-    
-    return answer;
-
-  } catch (error) {
-    console.error('Hybrid approach failed:', error.message);
-    return null;
-  }
-}
-
-// ============================================================================
-// GENERAL KNOWLEDGE FALLBACK (for NO KB match at all)
-// ============================================================================
-async function handleNoKBMatchWithGroq(userQuery) {
-  const generalPrompt = `You are GrowBot 🌿, a gardening assistant.
-
-The user asked: "${userQuery}"
-
-We don't have specific information about this in our knowledge base.
-
-YOUR TASK:
-- Provide helpful general gardening advice based on your knowledge
-- Keep it practical and actionable (2-3 sentences)
-- Mention this is general gardening advice
-- If the topic is outside gardening, politely redirect to gardening topics
-
-RULES:
-- Be honest about using general knowledge
-- Focus on safe, widely-accepted practices
-- Keep it conversational and friendly
-- If unsure, recommend consulting a local expert
-
-YOUR ANSWER:`;
-
-  const requestData = {
-    model: GROQ_MODEL,
-    messages: [
-      {
-        role: 'system',
-        content: 'You are GrowBot, a helpful gardening assistant. Provide general gardening advice when specific knowledge base info is unavailable.'
-      },
-      {
-        role: 'user',
-        content: generalPrompt
-      }
-    ],
-    temperature: 0.5,  // Moderate creativity for general advice
-    max_tokens: 350,
-    top_p: 0.9,
-    stream: false
-  };
-
-  try {
-    const response = await makeGroqRequest(requestData);
-    const answer = response.choices[0].message.content.trim();
-    
-    if (!answer || answer.length < 10) {
-      return null;
-    }
-    
-    return answer;
-
-  } catch (error) {
-    console.error('General knowledge query failed:', error.message);
-    return null;
-  }
-}
-
-// ============================================================================
-// ANTI-HALLUCINATION PROMPT (for HIGH/MEDIUM confidence KB matches)
-// ============================================================================
-function createAntiHallucinationPrompt(userQuery, kbSnippet, confidence) {
-  return `You are answering a gardening question for GrowBot. Follow these rules STRICTLY:
-
-🚫 STRICT RULES:
-1. Answer ONLY using the SOURCE DOCUMENT below - nothing else!
-2. If the answer is not in the source, say: "I don't have specific information about that in my knowledge base."
-3. Do NOT add information from general knowledge or make assumptions
-4. Do NOT infer or extrapolate beyond what's explicitly written
-5. Keep your answer natural, conversational, and helpful
-6. Make it 2-4 sentences maximum
-7. Directly address the user's specific question
-
-📄 SOURCE DOCUMENT (TRUTH):
-────────────────────────────
-${kbSnippet}
-────────────────────────────
-
-❓ USER'S QUESTION: "${userQuery}"
-
-🎯 CONFIDENCE LEVEL: ${confidence}
-
-✍️ YOUR TASK:
-- Read the source document carefully
-- Check if it contains the answer to the user's question
-- If YES: Rewrite the relevant information in a clear, natural, conversational way that directly answers their question
-- If NO: Say you don't have that specific information
-
-💬 YOUR ANSWER (conversational tone, like texting a friend, 2-4 sentences):`;
 }
 
 // ============================================================================
@@ -398,7 +366,7 @@ function makeGroqRequest(requestData) {
         'Authorization': `Bearer ${GROQ_API_KEY}`,
         'Content-Length': Buffer.byteLength(postData)
       },
-      timeout: 10000 // 10 second timeout
+      timeout: 10000
     };
 
     const req = https.request(options, (res) => {
@@ -442,21 +410,29 @@ function makeGroqRequest(requestData) {
 app.get('/', (req, res) => {
   res.json({
     status: 'running',
-    service: 'Dialogflow KB Backend with Hybrid Groq Enhancement 🌿',
-    approach: 'hybrid',
+    service: 'GrowBot - Smart Hybrid (Groq-First) 🌿',
+    strategy: 'groq_first_kb_validation',
     groqConfigured: !!GROQ_API_KEY,
     model: GROQ_MODEL,
-    version: '3.0.0-hybrid',
-    features: {
-      highConfidence: 'Strict KB-only enhancement',
-      mediumConfidence: 'Strict KB-only enhancement',
-      lowConfidence: 'Hybrid (KB + General Knowledge)',
-      noMatch: 'General gardening knowledge'
-    },
+    version: '4.0.0-smart-hybrid',
+    flowDescription: [
+      '1. Get Groq answer FIRST (primary source)',
+      '2. Check KB for validation (secondary)',
+      '3. Enhance Groq with KB if KB has HIGH/MEDIUM confidence',
+      '4. Use pure Groq if KB is LOW/NO_MATCH',
+      '5. Fallback to KB only if Groq fails'
+    ],
+    benefits: [
+      'Always fresh, accurate gardening info',
+      'KB validates and enhances when confident',
+      'Best of both worlds',
+      'Faster responses (parallel checks possible)',
+      'More reliable than KB-only'
+    ],
     endpoints: {
       detectIntent: 'POST /detectIntent',
-      testGroq: 'POST /test-groq',
-      testHybrid: 'POST /test-hybrid',
+      testGroq: 'POST /test-groq-primary',
+      testEnhancement: 'POST /test-enhancement',
       health: 'GET /'
     }
   });
@@ -466,67 +442,8 @@ app.get('/', (req, res) => {
 // TEST ENDPOINTS
 // ============================================================================
 
-// Test strict KB-only enhancement
-app.post('/test-groq', async (req, res) => {
-  const { query, kbText } = req.body;
-
-  if (!GROQ_API_KEY) {
-    return res.status(400).json({ error: 'GROQ_API_KEY not configured' });
-  }
-
-  try {
-    const enhanced = await enhanceAnswerWithGroq(
-      query || 'How to grow tomatoes?',
-      kbText || 'Tomatoes need full sun and regular watering.',
-      'HIGH'
-    );
-
-    res.json({
-      mode: 'strict_kb_only',
-      original: kbText,
-      enhanced: enhanced,
-      success: true
-    });
-
-  } catch (error) {
-    res.status(500).json({
-      error: error.message,
-      success: false
-    });
-  }
-});
-
-// Test hybrid approach
-app.post('/test-hybrid', async (req, res) => {
-  const { query, kbText } = req.body;
-
-  if (!GROQ_API_KEY) {
-    return res.status(400).json({ error: 'GROQ_API_KEY not configured' });
-  }
-
-  try {
-    const hybrid = await handleLowConfidenceWithGroq(
-      query || 'How to deal with aphids?',
-      kbText || 'Aphids are small insects.'
-    );
-
-    res.json({
-      mode: 'hybrid',
-      original: kbText,
-      enhanced: hybrid,
-      success: true
-    });
-
-  } catch (error) {
-    res.status(500).json({
-      error: error.message,
-      success: false
-    });
-  }
-});
-
-// Test general knowledge (no KB)
-app.post('/test-general', async (req, res) => {
+// Test pure Groq answer
+app.post('/test-groq-primary', async (req, res) => {
   const { query } = req.body;
 
   if (!GROQ_API_KEY) {
@@ -534,14 +451,45 @@ app.post('/test-general', async (req, res) => {
   }
 
   try {
-    const general = await handleNoKBMatchWithGroq(
-      query || 'What are the benefits of composting?'
+    const answer = await getGroqAnswer(
+      query || 'How do I prevent tomato blight?'
     );
 
     res.json({
-      mode: 'general_knowledge',
+      mode: 'groq_primary',
       query: query,
-      answer: general,
+      answer: answer,
+      success: true
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      error: error.message,
+      success: false
+    });
+  }
+});
+
+// Test Groq + KB enhancement
+app.post('/test-enhancement', async (req, res) => {
+  const { query, groqAnswer, kbAnswer } = req.body;
+
+  if (!GROQ_API_KEY) {
+    return res.status(400).json({ error: 'GROQ_API_KEY not configured' });
+  }
+
+  try {
+    const enhanced = await enhanceGroqWithKB(
+      query || 'How to grow tomatoes?',
+      groqAnswer || 'Plant tomatoes in full sun and water regularly.',
+      kbAnswer || 'Tomatoes need 6-8 hours of direct sunlight and consistent moisture.'
+    );
+
+    res.json({
+      mode: 'groq_enhanced_by_kb',
+      original: groqAnswer,
+      kbInfo: kbAnswer,
+      enhanced: enhanced,
       success: true
     });
 
@@ -560,7 +508,7 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log('');
   console.log('═══════════════════════════════════════════════════');
-  console.log('🌱 GrowBot Backend Server Started (HYBRID MODE)! 🌱');
+  console.log('🌱 GrowBot Backend - SMART HYBRID MODE! 🌱');
   console.log('═══════════════════════════════════════════════════');
   console.log(`📡 Port: ${PORT}`);
   console.log(`🤖 Dialogflow Project: ${projectId}`);
@@ -568,17 +516,24 @@ app.listen(PORT, () => {
   console.log(`✨ Groq API: ${GROQ_API_KEY ? '✅ Configured' : '❌ NOT CONFIGURED'}`);
   console.log(`🧠 Model: ${GROQ_MODEL}`);
   console.log('');
-  console.log('🎯 Hybrid Strategy:');
-  console.log('   HIGH/MEDIUM confidence → Strict KB-only');
-  console.log('   LOW confidence → Hybrid (KB + General)');
-  console.log('   NO MATCH → General Knowledge');
+  console.log('🎯 Smart Hybrid Strategy:');
+  console.log('   1️⃣  Get Groq answer FIRST (primary)');
+  console.log('   2️⃣  Check KB for validation (secondary)');
+  console.log('   3️⃣  Enhance with KB if HIGH/MEDIUM confidence');
+  console.log('   4️⃣  Use pure Groq if KB is LOW/NO_MATCH');
+  console.log('   5️⃣  Fallback to KB if Groq fails');
+  console.log('');
+  console.log('✅ Benefits:');
+  console.log('   • Fresh, accurate info (Groq first)');
+  console.log('   • KB validates when confident');
+  console.log('   • Best of both worlds');
+  console.log('   • Reliable fallback chain');
   console.log('');
   console.log('📍 Endpoints:');
   console.log(`   GET  / (health check)`);
   console.log(`   POST /detectIntent (main endpoint)`);
-  console.log(`   POST /test-groq (test KB-only)`);
-  console.log(`   POST /test-hybrid (test hybrid mode)`);
-  console.log(`   POST /test-general (test general knowledge)`);
+  console.log(`   POST /test-groq-primary (test Groq-first)`);
+  console.log(`   POST /test-enhancement (test KB enhancement)`);
   console.log('═══════════════════════════════════════════════════');
   console.log('');
 });
