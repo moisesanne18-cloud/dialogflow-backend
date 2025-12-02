@@ -1,28 +1,49 @@
 // Complete index.js - Dialogflow KB + Groq LLM + FCM NOTIFICATIONS
-// For Render.com deployment
+// For Render.com deployment - DUAL SERVICE ACCOUNTS VERSION
 
 const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
 const dialogflow = require('@google-cloud/dialogflow').v2beta1;
-const admin = require('firebase-admin'); // ✅ NEW: For FCM
-const https = require('https'); // For Groq API calls
+const admin = require('firebase-admin');
+const https = require('https');
 
 const app = express();
 app.use(bodyParser.json());
-app.use(cors()); // Allow all origins
+app.use(cors());
 
 // ============================================================================
-// FIREBASE ADMIN INITIALIZATION (for FCM)
+// FIREBASE ADMIN INITIALIZATION - DUAL SERVICE ACCOUNTS
 // ============================================================================
-// Initialize Firebase Admin SDK using the same service account
+
+let chatbotApp;
+let fcmApp;
+
 try {
-  admin.initializeApp({
-    credential: admin.credential.cert(require('./service-account.json'))
-  });
-  console.log('✅ Firebase Admin initialized successfully');
+  // 1️⃣ Initialize for CHATBOT (digibot-qkf9)
+  const chatbotServiceAccount = require('./service-account.json');
+  chatbotApp = admin.initializeApp({
+    credential: admin.credential.cert(chatbotServiceAccount),
+    projectId: 'digibot-qkf9'
+  }, 'chatbot');
+  
+  console.log('✅ Chatbot Firebase initialized (digibot-qkf9)');
 } catch (error) {
-  console.error('❌ Failed to initialize Firebase Admin:', error.message);
+  console.error('❌ Failed to initialize Chatbot Firebase:', error.message);
+}
+
+try {
+  // 2️⃣ Initialize for FCM NOTIFICATIONS (digisproutapp)
+  const fcmServiceAccount = require('./digisproutapp-service-account.json');
+  fcmApp = admin.initializeApp({
+    credential: admin.credential.cert(fcmServiceAccount),
+    projectId: 'digisproutapp'
+  }, 'fcm');
+  
+  console.log('✅ FCM Firebase initialized (digisproutapp)');
+} catch (error) {
+  console.error('❌ Failed to initialize FCM Firebase:', error.message);
+  console.error('⚠️  Make sure digisproutapp-service-account.json exists!');
 }
 
 // Dialogflow client
@@ -34,8 +55,8 @@ const projectId = 'digibot-qkf9';
 const knowledgeBaseId = 'Njc5Njg3MDI3MDg3NjM4NTI5';
 
 // Groq API Configuration
-const GROQ_API_KEY = process.env.GROQ_API_KEY; // Set this in Render dashboard
-const GROQ_MODEL = 'llama-3.1-8b-instant'; // Fast and accurate
+const GROQ_API_KEY = process.env.GROQ_API_KEY;
+const GROQ_MODEL = 'llama-3.1-8b-instant';
 
 // Confidence levels
 const CONFIDENCE_LEVELS = {
@@ -46,19 +67,28 @@ const CONFIDENCE_LEVELS = {
 };
 
 // ============================================================================
-// 🔔 NEW ENDPOINT - SEND FCM NOTIFICATION FOR CHAT MESSAGES
+// 🔔 FCM NOTIFICATION ENDPOINT - UPDATED TO USE FCM APP
 // ============================================================================
 app.post('/send-chat-notification', async (req, res) => {
   try {
     const { 
-      recipientToken,    // FCM token of message recipient
-      senderName,        // Name of person who sent the message
-      messageText,       // The actual message
-      chatRoomId,        // ID of the chat room
-      postTitle          // Title of the seed post
+      recipientToken,
+      senderName,
+      messageText,
+      chatRoomId,
+      postTitle
     } = req.body;
 
     console.log(`\n🔔 Sending notification to ${senderName}`);
+
+    // Check if FCM app is initialized
+    if (!fcmApp) {
+      console.error('❌ FCM app not initialized!');
+      return res.status(500).json({ 
+        success: false, 
+        error: 'FCM service not available - check digisproutapp-service-account.json' 
+      });
+    }
 
     // Validate required fields
     if (!recipientToken || !senderName || !messageText) {
@@ -101,21 +131,21 @@ app.post('/send-chat-notification', async (req, res) => {
       },
     };
 
-    // Send notification
-    const response = await admin.messaging().send(message);
+    // ✅ CRITICAL: Use fcmApp instance for FCM notifications
+    const response = await admin.messaging(fcmApp).send(message);
     
     console.log('✅ Notification sent successfully:', response);
     
     res.json({ 
       success: true, 
       messageId: response,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      project: 'digisproutapp'
     });
 
   } catch (error) {
     console.error('❌ FCM notification error:', error);
     
-    // Handle specific error cases
     if (error.code === 'messaging/invalid-registration-token' ||
         error.code === 'messaging/registration-token-not-registered') {
       res.status(404).json({ 
@@ -134,11 +164,18 @@ app.post('/send-chat-notification', async (req, res) => {
 });
 
 // ============================================================================
-// 🔔 BATCH NOTIFICATION ENDPOINT (Optional - for multiple recipients)
+// 🔔 BATCH NOTIFICATION ENDPOINT - UPDATED TO USE FCM APP
 // ============================================================================
 app.post('/send-batch-notifications', async (req, res) => {
   try {
     const { notifications } = req.body;
+
+    if (!fcmApp) {
+      return res.status(500).json({ 
+        success: false, 
+        error: 'FCM service not available' 
+      });
+    }
 
     if (!Array.isArray(notifications) || notifications.length === 0) {
       return res.status(400).json({ 
@@ -160,7 +197,8 @@ app.post('/send-batch-notifications', async (req, res) => {
       token: notif.recipientToken,
     }));
 
-    const response = await admin.messaging().sendEach(messages);
+    // ✅ Use fcmApp instance
+    const response = await admin.messaging(fcmApp).sendEach(messages);
     
     console.log(`✅ Sent ${response.successCount}/${notifications.length} notifications`);
     
@@ -169,6 +207,7 @@ app.post('/send-batch-notifications', async (req, res) => {
       successCount: response.successCount,
       failureCount: response.failureCount,
       responses: response.responses,
+      project: 'digisproutapp'
     });
 
   } catch (error) {
@@ -189,7 +228,6 @@ app.post('/detectIntent', async (req, res) => {
 
     console.log(`\n📩 New query: "${query}"`);
 
-    // Step 1: Call Dialogflow Knowledge Base
     const sessionPath = sessionClient.projectAgentSessionPath(projectId, sessionId);
     const knowledgeBasePath = `projects/${projectId}/knowledgeBases/${knowledgeBaseId}`;
 
@@ -215,7 +253,6 @@ app.post('/detectIntent', async (req, res) => {
     let finalFulfillmentText = result.fulfillmentText;
     let answerSource = 'default';
 
-    // Step 2: Hybrid Enhancement Logic
     if (knowledgeAnswers.length > 0) {
       const kbAnswer = knowledgeAnswers[0];
       const kbSnippet = kbAnswer.answer;
@@ -324,7 +361,7 @@ app.post('/detectIntent', async (req, res) => {
 });
 
 // ============================================================================
-// GROQ ENHANCEMENT FUNCTIONS (EXISTING CODE)
+// GROQ ENHANCEMENT FUNCTIONS (EXISTING CODE - NO CHANGES)
 // ============================================================================
 
 async function enhanceAnswerWithGroq(userQuery, kbSnippet, confidence) {
@@ -567,19 +604,24 @@ function makeGroqRequest(requestData) {
 }
 
 // ============================================================================
-// HEALTH CHECK ENDPOINT (UPDATED)
+// HEALTH CHECK ENDPOINT - UPDATED
 // ============================================================================
 app.get('/', (req, res) => {
   res.json({
     status: 'running',
     service: 'DigiSprout Backend - Chatbot + FCM Notifications 🌿',
-    version: '3.1.0-fcm',
+    version: '3.2.0-dual-fcm',
     groqConfigured: !!GROQ_API_KEY,
-    firebaseAdminConfigured: !!admin.apps.length,
+    chatbotAppConfigured: !!chatbotApp,
+    fcmAppConfigured: !!fcmApp,
     model: GROQ_MODEL,
+    projects: {
+      chatbot: 'digibot-qkf9',
+      fcm: 'digisproutapp'
+    },
     features: {
-      chatbot: 'Dialogflow + Groq Hybrid',
-      notifications: 'Firebase Cloud Messaging',
+      chatbot: 'Dialogflow + Groq Hybrid (digibot-qkf9)',
+      notifications: 'Firebase Cloud Messaging (digisproutapp)',
       highConfidence: 'Strict KB-only enhancement',
       mediumConfidence: 'Strict KB-only enhancement',
       lowConfidence: 'Hybrid (KB + General Knowledge)',
@@ -598,7 +640,7 @@ app.get('/', (req, res) => {
 });
 
 // ============================================================================
-// TEST ENDPOINTS (EXISTING CODE)
+// TEST ENDPOINTS (EXISTING CODE - NO CHANGES)
 // ============================================================================
 
 app.post('/test-groq', async (req, res) => {
@@ -698,7 +740,8 @@ app.listen(PORT, () => {
   console.log(`🤖 Dialogflow Project: ${projectId}`);
   console.log(`📚 Knowledge Base ID: ${knowledgeBaseId}`);
   console.log(`✨ Groq API: ${GROQ_API_KEY ? '✅ Configured' : '❌ NOT CONFIGURED'}`);
-  console.log(`🔔 FCM: ${admin.apps.length ? '✅ Configured' : '❌ NOT CONFIGURED'}`);
+  console.log(`🤖 Chatbot App: ${chatbotApp ? '✅ Configured (digibot-qkf9)' : '❌ NOT CONFIGURED'}`);
+  console.log(`🔔 FCM App: ${fcmApp ? '✅ Configured (digisproutapp)' : '❌ NOT CONFIGURED'}`);
   console.log(`🧠 Model: ${GROQ_MODEL}`);
   console.log('');
   console.log('🎯 Features:');
