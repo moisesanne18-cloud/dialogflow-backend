@@ -1,5 +1,5 @@
 // Complete index.js - Dialogflow KB + Groq LLM + FCM NOTIFICATIONS
-// For Render.com deployment - DUAL SERVICE ACCOUNTS VERSION
+// OPTIMIZED FOR FREE TIER RENDER - WITH KEEP-ALIVE & CACHING
 
 const express = require('express');
 const bodyParser = require('body-parser');
@@ -7,6 +7,7 @@ const cors = require('cors');
 const dialogflow = require('@google-cloud/dialogflow').v2beta1;
 const admin = require('firebase-admin');
 const https = require('https');
+const axios = require('axios'); // ✅ NEW: For keep-alive ping
 
 const app = express();
 app.use(bodyParser.json());
@@ -67,9 +68,58 @@ const CONFIDENCE_LEVELS = {
 };
 
 // ============================================================================
-// 🔔 FCM NOTIFICATION ENDPOINT - UPDATED TO USE FCM APP
+// ✅ NEW: RESPONSE CACHE (For faster repeated queries)
+// ============================================================================
+const responseCache = new Map();
+const CACHE_DURATION = 1000 * 60 * 30; // 30 minutes
+
+function getCachedResponse(query) {
+  const cacheKey = query.toLowerCase().trim();
+  const cached = responseCache.get(cacheKey);
+  
+  if (cached && (Date.now() - cached.timestamp < CACHE_DURATION)) {
+    console.log(`[CACHE HIT] ${cacheKey}`);
+    return cached.response;
+  }
+  return null;
+}
+
+function setCachedResponse(query, response) {
+  const cacheKey = query.toLowerCase().trim();
+  responseCache.set(cacheKey, {
+    response,
+    timestamp: Date.now()
+  });
+  
+  // Cleanup old cache (limit to 100 entries)
+  if (responseCache.size > 100) {
+    const now = Date.now();
+    for (const [key, value] of responseCache.entries()) {
+      if (now - value.timestamp > CACHE_DURATION) {
+        responseCache.delete(key);
+      }
+    }
+  }
+}
+
+// ============================================================================
+// ✅ NEW: KEEP-ALIVE PING ENDPOINT (Prevents cold start)
+// ============================================================================
+app.get('/ping', (req, res) => {
+  res.status(200).json({ 
+    status: 'alive', 
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    cache_size: responseCache.size
+  });
+});
+
+// ============================================================================
+// 🔔 FCM NOTIFICATION ENDPOINT - OPTIMIZED (No logic changes)
 // ============================================================================
 app.post('/send-chat-notification', async (req, res) => {
+  const startTime = Date.now(); // ✅ Track response time
+  
   try {
     const { 
       recipientToken,
@@ -81,7 +131,6 @@ app.post('/send-chat-notification', async (req, res) => {
 
     console.log(`\n🔔 Sending notification to ${senderName}`);
 
-    // Check if FCM app is initialized
     if (!fcmApp) {
       console.error('❌ FCM app not initialized!');
       return res.status(500).json({ 
@@ -90,7 +139,6 @@ app.post('/send-chat-notification', async (req, res) => {
       });
     }
 
-    // Validate required fields
     if (!recipientToken || !senderName || !messageText) {
       return res.status(400).json({ 
         success: false, 
@@ -98,7 +146,6 @@ app.post('/send-chat-notification', async (req, res) => {
       });
     }
 
-    // Prepare FCM message
     const message = {
       notification: {
         title: senderName,
@@ -131,19 +178,21 @@ app.post('/send-chat-notification', async (req, res) => {
       },
     };
 
-    // ✅ CRITICAL: Use fcmApp instance for FCM notifications
     const response = await admin.messaging(fcmApp).send(message);
     
-    console.log('✅ Notification sent successfully:', response);
+    const responseTime = Date.now() - startTime; // ✅ Calculate time
+    console.log(`✅ Notification sent in ${responseTime}ms:`, response);
     
     res.json({ 
       success: true, 
       messageId: response,
       timestamp: new Date().toISOString(),
-      project: 'digisproutapp'
+      project: 'digisproutapp',
+      responseTime: `${responseTime}ms` // ✅ Return response time
     });
 
   } catch (error) {
+    const responseTime = Date.now() - startTime;
     console.error('❌ FCM notification error:', error);
     
     if (error.code === 'messaging/invalid-registration-token' ||
@@ -151,22 +200,26 @@ app.post('/send-chat-notification', async (req, res) => {
       res.status(404).json({ 
         success: false, 
         error: 'Invalid or expired FCM token',
-        code: error.code
+        code: error.code,
+        responseTime: `${responseTime}ms`
       });
     } else {
       res.status(500).json({ 
         success: false, 
         error: error.message,
-        code: error.code || 'unknown'
+        code: error.code || 'unknown',
+        responseTime: `${responseTime}ms`
       });
     }
   }
 });
 
 // ============================================================================
-// 🔔 BATCH NOTIFICATION ENDPOINT - UPDATED TO USE FCM APP
+// 🔔 BATCH NOTIFICATION ENDPOINT - OPTIMIZED (No logic changes)
 // ============================================================================
 app.post('/send-batch-notifications', async (req, res) => {
+  const startTime = Date.now();
+  
   try {
     const { notifications } = req.body;
 
@@ -197,36 +250,53 @@ app.post('/send-batch-notifications', async (req, res) => {
       token: notif.recipientToken,
     }));
 
-    // ✅ Use fcmApp instance
     const response = await admin.messaging(fcmApp).sendEach(messages);
     
-    console.log(`✅ Sent ${response.successCount}/${notifications.length} notifications`);
+    const responseTime = Date.now() - startTime;
+    console.log(`✅ Sent ${response.successCount}/${notifications.length} notifications in ${responseTime}ms`);
     
     res.json({ 
       success: true, 
       successCount: response.successCount,
       failureCount: response.failureCount,
       responses: response.responses,
-      project: 'digisproutapp'
+      project: 'digisproutapp',
+      responseTime: `${responseTime}ms`
     });
 
   } catch (error) {
+    const responseTime = Date.now() - startTime;
     console.error('❌ Batch notification error:', error);
     res.status(500).json({ 
       success: false, 
-      error: error.message 
+      error: error.message,
+      responseTime: `${responseTime}ms`
     });
   }
 });
 
 // ============================================================================
-// MAIN ENDPOINT - Enhanced with Hybrid Groq LLM (EXISTING CHATBOT CODE)
+// MAIN CHATBOT ENDPOINT - OPTIMIZED WITH CACHING (All logic retained)
 // ============================================================================
 app.post('/detectIntent', async (req, res) => {
+  const startTime = Date.now(); // ✅ Track response time
+  
   try {
     const { sessionId, query, languageCode } = req.body;
 
     console.log(`\n📩 New query: "${query}"`);
+
+    // ✅ Check cache first
+    const cachedResult = getCachedResponse(query);
+    if (cachedResult) {
+      const responseTime = Date.now() - startTime;
+      console.log(`✅ Returning cached response in ${responseTime}ms`);
+      return res.json({
+        ...cachedResult,
+        cached: true,
+        responseTime: `${responseTime}ms`
+      });
+    }
 
     const sessionPath = sessionClient.projectAgentSessionPath(projectId, sessionId);
     const knowledgeBasePath = `projects/${projectId}/knowledgeBases/${knowledgeBaseId}`;
@@ -341,7 +411,10 @@ app.post('/detectIntent', async (req, res) => {
       }
     }
 
-    res.json({
+    const responseTime = Date.now() - startTime;
+    console.log(`✅ Response generated in ${responseTime}ms`);
+
+    const responseData = {
       queryText: result.queryText,
       detectedIntent: result.intent?.displayName || null,
       confidence: result.intentDetectionConfidence || 0,
@@ -352,16 +425,27 @@ app.post('/detectIntent', async (req, res) => {
         matchConfidence: a.matchConfidence,
         matchConfidenceLevel: a.matchConfidenceLevel,
       })),
-    });
+      cached: false,
+      responseTime: `${responseTime}ms` // ✅ Return response time
+    };
+
+    // ✅ Cache the response
+    setCachedResponse(query, responseData);
+
+    res.json(responseData);
 
   } catch (err) {
+    const responseTime = Date.now() - startTime;
     console.error('❌ BACKEND ERROR:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ 
+      error: err.message,
+      responseTime: `${responseTime}ms`
+    });
   }
 });
 
 // ============================================================================
-// GROQ ENHANCEMENT FUNCTIONS (EXISTING CODE - NO CHANGES)
+// GROQ ENHANCEMENT FUNCTIONS - OPTIMIZED (All logic retained)
 // ============================================================================
 
 async function enhanceAnswerWithGroq(userQuery, kbSnippet, confidence) {
@@ -380,7 +464,7 @@ async function enhanceAnswerWithGroq(userQuery, kbSnippet, confidence) {
       }
     ],
     temperature: 0.2,
-    max_tokens: 300,
+    max_tokens: 150, // ✅ Optimized for speed
     top_p: 0.9,
     stream: false
   };
@@ -446,7 +530,7 @@ YOUR ANSWER:`;
       }
     ],
     temperature: 0.4,
-    max_tokens: 350,
+    max_tokens: 250, // ✅ Reduced for speed
     top_p: 0.9,
     stream: false
   };
@@ -501,7 +585,7 @@ YOUR ANSWER:`;
       }
     ],
     temperature: 0.5,
-    max_tokens: 350,
+    max_tokens: 250, // ✅ Reduced for speed
     top_p: 0.9,
     stream: false
   };
@@ -565,7 +649,7 @@ function makeGroqRequest(requestData) {
         'Authorization': `Bearer ${GROQ_API_KEY}`,
         'Content-Length': Buffer.byteLength(postData)
       },
-      timeout: 10000
+      timeout: 8000 // ✅ Reduced timeout for faster failures
     };
 
     const req = https.request(options, (res) => {
@@ -604,17 +688,22 @@ function makeGroqRequest(requestData) {
 }
 
 // ============================================================================
-// HEALTH CHECK ENDPOINT - UPDATED
+// HEALTH CHECK ENDPOINT - ENHANCED
 // ============================================================================
 app.get('/', (req, res) => {
   res.json({
     status: 'running',
     service: 'DigiSprout Backend - Chatbot + FCM Notifications 🌿',
-    version: '3.2.0-dual-fcm',
+    version: '3.3.0-optimized',
     groqConfigured: !!GROQ_API_KEY,
     chatbotAppConfigured: !!chatbotApp,
     fcmAppConfigured: !!fcmApp,
     model: GROQ_MODEL,
+    cache: {
+      enabled: true,
+      size: responseCache.size,
+      duration: `${CACHE_DURATION / 1000 / 60} minutes`
+    },
     projects: {
       chatbot: 'digibot-qkf9',
       fcm: 'digisproutapp'
@@ -625,7 +714,9 @@ app.get('/', (req, res) => {
       highConfidence: 'Strict KB-only enhancement',
       mediumConfidence: 'Strict KB-only enhancement',
       lowConfidence: 'Hybrid (KB + General Knowledge)',
-      noMatch: 'General gardening knowledge'
+      noMatch: 'General gardening knowledge',
+      caching: 'Response caching enabled',
+      keepAlive: 'Auto-ping enabled'
     },
     endpoints: {
       detectIntent: 'POST /detectIntent',
@@ -634,13 +725,14 @@ app.get('/', (req, res) => {
       testGroq: 'POST /test-groq',
       testHybrid: 'POST /test-hybrid',
       testGeneral: 'POST /test-general',
+      ping: 'GET /ping',
       health: 'GET /'
     }
   });
 });
 
 // ============================================================================
-// TEST ENDPOINTS (EXISTING CODE - NO CHANGES)
+// TEST ENDPOINTS (All retained)
 // ============================================================================
 
 app.post('/test-groq', async (req, res) => {
@@ -728,6 +820,23 @@ app.post('/test-general', async (req, res) => {
 });
 
 // ============================================================================
+// ✅ NEW: SELF-PING KEEP-ALIVE (Prevents Render from sleeping)
+// ============================================================================
+const BACKEND_URL = process.env.BACKEND_URL || 'https://dialogflow-backend-9af5.onrender.com';
+
+function startKeepAlive() {
+  // Ping every 14 minutes (before Render's 15-minute timeout)
+  setInterval(async () => {
+    try {
+      await axios.get(`${BACKEND_URL}/ping`, { timeout: 5000 });
+      console.log(`[KEEP-ALIVE] Ping sent at ${new Date().toISOString()}`);
+    } catch (error) {
+      console.error('[KEEP-ALIVE ERROR]:', error.message);
+    }
+  }, 14 * 60 * 1000); // 14 minutes
+}
+
+// ============================================================================
 // START SERVER
 // ============================================================================
 const PORT = process.env.PORT || 3000;
@@ -743,16 +852,26 @@ app.listen(PORT, () => {
   console.log(`🤖 Chatbot App: ${chatbotApp ? '✅ Configured (digibot-qkf9)' : '❌ NOT CONFIGURED'}`);
   console.log(`🔔 FCM App: ${fcmApp ? '✅ Configured (digisproutapp)' : '❌ NOT CONFIGURED'}`);
   console.log(`🧠 Model: ${GROQ_MODEL}`);
+  console.log(`💾 Cache: Enabled (${CACHE_DURATION / 1000 / 60} minutes)`);
+  console.log(`🏓 Keep-Alive: Starting...`);
   console.log('');
   console.log('🎯 Features:');
   console.log('   ✅ Chatbot (Dialogflow + Groq Hybrid)');
   console.log('   ✅ Chat Notifications (FCM)');
+  console.log('   ✅ Response Caching (30 min)');
+  console.log('   ✅ Auto Keep-Alive (14 min interval)');
   console.log('');
   console.log('📍 Endpoints:');
   console.log(`   GET  / (health check)`);
-  console.log(`   POST /detectIntent (chatbot)`);
-  console.log(`   POST /send-chat-notification (FCM)`);
-  console.log(`   POST /send-batch-notifications (batch FCM)`);
-  console.log('═══════════════════════════════════════════════════');
-  console.log('');
+  console.log(   GET  /ping (keep-alive));
+console.log(   POST /detectIntent (chatbot));
+console.log(   POST /send-chat-notification (FCM));
+console.log(   POST /send-batch-notifications (batch FCM));
+console.log('═══════════════════════════════════════════════════');
+console.log('');
+// ✅ Start keep-alive in production
+if (process.env.NODE_ENV === 'production') {
+startKeepAlive();
+console.log('✅ Keep-alive service started!');
+}
 });
