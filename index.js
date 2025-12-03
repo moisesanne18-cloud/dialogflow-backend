@@ -862,12 +862,12 @@ app.listen(PORT, () => {
   console.log('   ✅ Auto Keep-Alive (14 min interval)');
   console.log('');
   console.log('📍 Endpoints:');
-  console.log(`   GET  / (health check)`);
-  console.log(   GET  /ping (keep-alive));
-console.log(   POST /detectIntent (chatbot));
-console.log(   POST /send-chat-notification (FCM));
-console.log('📮 POST /send-batch-notifications (batch FCM)');
-console.log('═══════════════════════════════════════════════════');
+  console.log('   GET  / (health check)');
+  console.log('   GET  /ping (keep-alive)');
+  console.log('   POST /detectIntent (chatbot)');
+  console.log('   POST /send-chat-notification (FCM)');
+  console.log('   POST /send-batch-notifications (batch FCM)');
+  console.log('═══════════════════════════════════════════════════');
 console.log('');
 // ✅ Start keep-alive in production
 if (process.env.NODE_ENV === 'production') {
