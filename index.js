@@ -123,14 +123,13 @@ app.post('/send-chat-notification', async (req, res) => {
   try {
     const { 
       recipientToken,
-      senderId, // ✅ NEW: Added senderId to filter self-notifications
       senderName,
       messageText,
       chatRoomId,
       postTitle
     } = req.body;
 
-    console.log(`\n🔔 Sending notification to ${senderName} (Sender ID: ${senderId || 'not provided'})`);
+    console.log(`\n🔔 Sending notification to ${senderName}`);
 
     if (!fcmApp) {
       console.error('❌ FCM app not initialized!');
@@ -157,7 +156,6 @@ app.post('/send-chat-notification', async (req, res) => {
       data: {
         chatRoomId: chatRoomId || '',
         postTitle: postTitle || '',
-        senderId: senderId || '', // ✅ NEW: Include senderId in notification data
         senderName: senderName,
         type: 'chat_message',
         clickAction: 'FLUTTER_NOTIFICATION_CLICK',
@@ -247,8 +245,6 @@ app.post('/send-batch-notifications', async (req, res) => {
       data: {
         chatRoomId: notif.chatRoomId || '',
         postTitle: notif.postTitle || '',
-        senderId: notif.senderId || '', // ✅ NEW: Include senderId for self-notification filtering
-        senderName: notif.senderName || '',
         type: 'chat_message',
       },
       token: notif.recipientToken,
@@ -879,4 +875,3 @@ startKeepAlive();
 console.log('✅ Keep-alive service started!');
 }
 });
-
